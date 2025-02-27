@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Proxy Controller</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .card { border: 1px solid #ddd; padding: 20px; margin: 10px 0; border-radius: 5px; }
+        .status { padding: 5px 10px; border-radius: 3px; }
+        .online { background: #d4edda; color: #155724; }
+        .offline { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+<h1>服务控制器</h1>
+
+<div class="card">
+    <h2>当前状态</h2>
+    <p>代理服务状态:
+        <span id="proxyStatus" class="status"></span>
+    </p>
+    <p>心跳检测状态:
+        <span id="heartbeatStatus" class="status"></span>
+    </p>
+    <button onclick="toggleProxy()">切换代理状态</button>
+</div>
+
+<div class="card">
+    <h2>配置管理</h2>
+    <form onsubmit="updateConfig(event)">
+        <div>
+            <label>代理目标地址:</label>
+            <input type="url" id="proxyTarget" required style="width: 300px;">
+        </div>
+        <div>
+            <label>心跳检测地址:</label>
+            <input type="url" id="heartbeatUrl" required style="width: 300px;">
+        </div>
+        <button type="submit">更新配置</button>
+    </form>
+</div>
+
+<script>
+    // 初始化加载配置
+    function loadConfig() {
+        fetch('/api/config')
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('proxyTarget').value = data.proxy_target;
+                document.getElementById('heartbeatUrl').value = data.heartbeat_url;
+                updateStatusDisplay(data);
+            });
+    }
+
+    // 更新配置
+    function updateConfig(e) {
+        e.preventDefault();
+        const config = {
+            proxy_target: document.getElementById('proxyTarget').value,
+            heartbeat_url: document.getElementById('heartbeatUrl').value
+        };
+
+        fetch('/api/config', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config)
+        }).then(() => loadConfig());
+    }
+
+    // 切换代理状态
+    function toggleProxy() {
+        fetch('/api/toggle', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                updateStatusDisplay(data);
+            });
+    }
+
+    // 更新状态显示
+    function updateStatusDisplay(data) {
+        const proxyStatus = document.getElementById('proxyStatus');
+        proxyStatus.textContent = data.proxy_enabled ? '已启用' : '已禁用';
+        proxyStatus.className = `status ${data.proxy_enabled ? 'online' : 'offline'}`;
+
+        const heartbeatStatus = document.getElementById('heartbeatStatus');
+        heartbeatStatus.textContent = data.heartbeat_ok ? '正常' : '异常';
+        heartbeatStatus.className = `status ${data.heartbeat_ok ? 'online' : 'offline'}`;
+    }
+
+    // 定时刷新状态
+    setInterval(() => {
+        fetch('/api/status')
+            .then(r => r.json())
+            .then(updateStatusDisplay);
+    }, 3000);
+
+    // 初始化
+    loadConfig();
+</script>
+</body>
+</html>

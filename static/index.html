@@ -1,100 +1,350 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Proxy Controller</title>
+    <title>多客户端代理管理器</title>
     <style>
-        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-        .card { border: 1px solid #ddd; padding: 20px; margin: 10px 0; border-radius: 5px; }
-        .status { padding: 5px 10px; border-radius: 3px; }
-        .online { background: #d4edda; color: #155724; }
-        .offline { background: #f8d7da; color: #721c24; }
+
+        /* 新增表格样式 */
+        .client-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        .client-table th, .client-table td {
+            border: 1px solid #ddd;
+            padding: 12px;
+            text-align: left;
+        }
+        .client-table tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 6px;
+        }
+        .status-indicator-new {
+            display: inline-flex;  /* 使用行内弹性布局 */
+            align-items: center;   /* 垂直居中 */
+            gap: 6px;             /* 元素间距 */
+            white-space: nowrap;  /* 禁止文字换行 */
+            line-height: 1;       /* 统一行高 */
+        }
+        .status-indicator .icon {
+            flex-shrink: 0;       /* 禁止图标缩放 */
+            font-size: 1em;       /* 与文字大小同步 */
+        }
+        .online { background: #28a745; }
+        .offline { background: #dc3545; }
+        .config-form { margin: 20px 0; }
+        /* 新增错误提示样式 */
+        .error-toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 25px;
+            background: #dc3545;
+            color: white;
+            border-radius: 5px;
+            display: none;
+            z-index: 1000;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+
+        /* 新增心跳状态颜色 */
+        .reconnecting { background: #ffc107; }
+
+        /* 响应式调整 */
+        @media (max-width: 480px) {
+            .status-indicator {
+                font-size: 0.9em;
+                gap: 4px;
+            }
+        }
+
+
+
     </style>
 </head>
 <body>
-<h1>服务控制器</h1>
+<h1>多客户端代理管理器</h1>
 
-<div class="card">
-    <h2>当前状态</h2>
-    <p>代理服务状态:
-        <span id="proxyStatus" class="status"></span>
-    </p>
-    <p>心跳检测状态:
-        <span id="heartbeatStatus" class="status"></span>
-    </p>
-    <button onclick="toggleProxy()">切换代理状态</button>
-</div>
-
-<div class="card">
-    <h2>配置管理</h2>
-    <form onsubmit="updateConfig(event)">
-        <div>
-            <label>代理目标地址:</label>
-            <input type="url" id="proxyTarget" required style="width: 300px;">
-        </div>
-        <div>
-            <label>心跳检测地址:</label>
-            <input type="url" id="heartbeatUrl" required style="width: 300px;">
-        </div>
-        <button type="submit">更新配置</button>
+<div class="config-form">
+    <h2>添加新客户端</h2>
+    <form onsubmit="createClient(event)">
+        <input type="text" id="newClientName" placeholder="客户端名称" required>
+        <input type="url" id="newProxyTarget" placeholder="代理目标地址" required>
+        <button type="submit">添加客户端</button>
     </form>
 </div>
 
+<table class="client-table">
+    <thead>
+    <tr>
+        <th>客户端</th>
+        <th>客户端IP</th>
+        <th>代理状态</th>
+        <th>代理目标</th>
+        <th>操作</th>
+    </tr>
+    </thead>
+    <tbody id="clientList">
+    <!-- 动态生成 -->
+    </tbody>
+</table>
+
+<h2>心跳状态监控</h2>
+<table class="client-table">
+    <thead>
+    <tr>
+        <th>节点名称</th>
+        <th>IP</th>
+        <th>在线状态</th>
+    </tr>
+    </thead>
+    <tbody id="heartbeatList">
+    <!-- 动态生成 -->
+    </tbody>
+</table>
+
+<!-- 新增错误提示容器 -->
+<div id="errorToast" class="error-toast"></div>
+
 <script>
-    // 初始化加载配置
-    function loadConfig() {
-        fetch('/api/config')
-            .then(r => r.json())
-            .then(data => {
-                document.getElementById('proxyTarget').value = data.proxy_target;
-                document.getElementById('heartbeatUrl').value = data.heartbeat_url;
-                updateStatusDisplay(data);
-            });
+    let lastClientData = null;
+    let pollTimer = null;
+    // 状态配置
+    const STATUS_MAP = {
+        0: {
+            text: '离线',
+            color: '#ff4d4f',
+            icon: '🔴' // 或使用字体图标<i class="icon-offline"></i>
+        },
+        1: {
+            class: 'active',
+            text: '在线',
+            color: '#52c41a',
+            icon: '🟢'
+        },
+        2: {
+            class: 'reconnecting',
+            text: '重连中',
+            color: '#faad14',
+            icon: '🟡'
+        }
+    };
+
+    // 动态渲染客户端列表
+    function renderClients(clients) {
+        const tbody = document.getElementById('clientList');
+        tbody.innerHTML = '';
+
+        clients.forEach(client => {
+            const row = document.createElement('tr');
+
+            // 状态指示器
+            const proxyStatus = `
+                    <span class="status-indicator ${client.enabled ? 'online' : 'offline'}"></span>
+                    ${client.enabled ? '已启用' : '已禁用'}
+                `;
+
+
+            // 操作按钮
+            const actions = `
+                    <button onclick="toggleClient('${client.id}')">${client.enabled ? '禁用' : '启用'}</button>
+                    <button onclick="deleteClient('${client.id}')">删除</button>
+                `;
+
+            row.innerHTML = `
+                    <td>${client.name}</td>
+                    <td>${client.ip}</td>
+                    <td>${proxyStatus}</td>
+                    <td>${client.proxy_target}</td>
+                    <td>${actions}</td>
+                `;
+
+            tbody.appendChild(row);
+        });
     }
 
-    // 更新配置
-    function updateConfig(e) {
+    // 获取客户端列表
+    function loadClients() {
+        fetch('/api/clients')
+            .then(r => r.json())
+            .then(renderClients);
+    }
+
+    // 创建新客户端
+    // 增强原有API调用（示例修改createClient）
+    function createClient(e) {
         e.preventDefault();
-        const config = {
-            proxy_target: document.getElementById('proxyTarget').value,
-            heartbeat_url: document.getElementById('heartbeatUrl').value
+        const newClient = {
+            name: document.getElementById('newClientName').value,
+            proxy_target: document.getElementById('newProxyTarget').value,
         };
 
-        fetch('/api/config', {
-            method: 'PUT',
+        fetch('/api/clients/create', {
+            method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(config)
-        }).then(() => loadConfig());
+            body: JSON.stringify(newClient)
+        })
+            .then(response => {
+                if (!response.ok) throw new Error('创建失败：服务器返回错误');
+                return response.json();
+            })
+            .then(loadAllData)
+            .catch(err => showError(err.message));
     }
 
-    // 切换代理状态
-    function toggleProxy() {
-        fetch('/api/toggle', { method: 'POST' })
-            .then(r => r.json())
-            .then(data => {
-                updateStatusDisplay(data);
-            });
+    // 切换客户端状态
+    function toggleClient(clientId) {
+        fetch(`/api/clients/${clientId}/toggle`, {
+            method: 'POST'
+        }).then(loadClients);
     }
 
-    // 更新状态显示
-    function updateStatusDisplay(data) {
-        const proxyStatus = document.getElementById('proxyStatus');
-        proxyStatus.textContent = data.proxy_enabled ? '已启用' : '已禁用';
-        proxyStatus.className = `status ${data.proxy_enabled ? 'online' : 'offline'}`;
+    // 删除客户端
+    function deleteClient(clientId) {
+        if (confirm('确定要删除该客户端吗？')) {
+            fetch(`/api/clients/${clientId}`, {
+                method: 'DELETE'
+            }).then(loadClients);
+        }
+    }
+    let errorCache = {
+        lastErrorTime: 0,
+        errorMessage: '',
+        showCount: 0
+    };
+    // 新增错误处理函数
+    // 更新后的错误提示方法
+    function showError(message) {
+        const now = Date.now();
+        const isSameError = message === errorCache.errorMessage;
 
-        const heartbeatStatus = document.getElementById('heartbeatStatus');
-        heartbeatStatus.textContent = data.heartbeat_ok ? '正常' : '异常';
-        heartbeatStatus.className = `status ${data.heartbeat_ok ? 'online' : 'offline'}`;
+        // 错误抑制规则：
+        // 1. 相同错误5分钟内最多显示3次
+        // 2. 相同错误首次立即显示，后续每2分钟显示一次
+        if (isSameError) {
+            if (now - errorCache.lastErrorTime < 120000 && errorCache.showCount >= 3) {
+                return;
+            }
+        } else {
+            errorCache = { lastErrorTime: now, errorMessage: message, showCount: 0 };
+        }
+
+        errorCache.showCount++;
+        errorCache.lastErrorTime = now;
+
+        // 实际显示逻辑
+        const toast = document.getElementById('errorToast');
+        toast.textContent = `${message} (${errorCache.showCount}次)`;
+        toast.style.display = 'block';
+        setTimeout(() => toast.style.display = 'none', 5000);
+        adjustPolling(true);
     }
 
-    // 定时刷新状态
-    setInterval(() => {
-        fetch('/api/status')
-            .then(r => r.json())
-            .then(updateStatusDisplay);
-    }, 3000);
+    // 心跳状态渲染 todo
+    function renderHeartbeats(heartbeats) {
+        const tbody = document.getElementById('heartbeatList');
+        tbody.innerHTML = '';
 
-    // 初始化
-    loadConfig();
+        heartbeats.forEach(hb => {
+            const row = document.createElement('tr');
+            const duration = Math.floor((Date.now() - new Date(hb.lastCheck).getTime()) / 1000);
+
+            // <td> <span class="status-indicator ${hb.state}"></span> ${hb.state.charAt(0).toUpperCase() + hb.state.slice(1)}</td>
+            // <td>${new Date(hb.lastCheck).toLocaleString()}</td>
+            // <td>${hb.state === 'offline' ? `${duration}秒` : '-'}</td>
+
+            row.innerHTML = `
+                <td>${hb.name}</td>
+                <td>${hb.ip}</td>
+                <td title="最后心跳: ${hb.lastCheck}">
+                    <span class="status-indicator-new ${STATUS_MAP[hb.state].class}">
+                        ${STATUS_MAP[hb.state].icon}${STATUS_MAP[hb.state].text}
+                    </span>
+                </td>
+            `;
+            tbody.appendChild(row);
+        });
+    }
+
+    // 获取心跳数据
+    // function loadHeartbeats() {
+    //     fetch('/api/heartbeats')
+    //         .then(response => {
+    //             if (!response.ok) throw new Error(`HTTP错误 ${response.status}`);
+    //             return response.json();
+    //         })
+    //         .then(renderHeartbeats)
+    //         .catch(err => showError(`心跳监控不可用: ${err.message}`));
+    // }
+
+    // 深度比较工具函数
+    function deepEqual(a, b) {
+        return JSON.stringify(a) === JSON.stringify(b);
+    }
+
+    // 添加加载状态锁
+    let isLoading = false;
+
+    async function loadAllData() {
+        if (isLoading) return;
+
+        isLoading = true;
+        try {
+            const [clients, heartbeats] = await Promise.allSettled([
+                fetch('/api/clients').then(r => r.json()),
+                fetch('/api/heartbeats').then(r => r.json())
+            ]);
+
+            // 仅在有数据变化时更新DOM
+            if (!deepEqual(clients.value, lastClientData)) {
+                renderClients(clients.value);
+                lastClientData = clients.value;
+            }
+
+            // 心跳数据异常时静默记录
+            if (heartbeats.status === 'rejected') {
+                console.warn('心跳更新失败:', heartbeats.reason);
+            } else {
+                renderHeartbeats(heartbeats.value);
+            }
+        } catch (err) {
+            // 网络级错误才提示用户
+            if (err instanceof TypeError) {
+                showError(`网络连接异常: ${err.message}`);
+            }
+        } finally {
+            isLoading = false;
+        }
+    }
+    loadAllData();
+
+    let pollInterval = 8000; // 初始间隔
+    const maxInterval = 60000; // 最大间隔
+
+    function adjustPolling(hasError) {
+        if (hasError) {
+            pollInterval = Math.min(pollInterval * 2, maxInterval);
+        } else {
+            pollInterval = 8000;
+        }
+
+        clearInterval(pollTimer);
+        pollTimer = setInterval(loadAllData, pollInterval);
+    }
+
+    function handleSuccess() {
+        adjustPolling(false);
+    }
+
+    // 修改初始化逻辑
+    setInterval(loadAllData, 8000); // 缩短为3秒刷新
+
 </script>
 </body>
 </html>

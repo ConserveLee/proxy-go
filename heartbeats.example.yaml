@@ -1,0 +1,7 @@
+heartbeats:
+  interval: 30
+  timeout: 5
+  max_missed_heartbeats: 3
+  max_missed_heartbeats_reset_timeout: 15
+  liveIp: 10.10.33.31
+  backupIp: 10.10.3.2

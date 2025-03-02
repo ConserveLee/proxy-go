@@ -1,0 +1,13 @@
+clients:
+  client0:
+    id: 0
+    ip: 192.168.50.123
+    name: pc
+    proxy_target: http://backup.example.com
+    enabled: true
+  client1:
+    id: 1
+    ip: 192.168.50.2
+    name: ios
+    proxy_target: http://backup.example.com
+    enabled: true
